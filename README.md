@@ -42,7 +42,7 @@ DSH 会话页顶部页签栏里的 **「批注」**（与「对话轨迹」「�
     - 第二层「本项目其它会话碰过」：同一工作区里**最近 15 个会话**（可配 `projectSessions`）碰过的文档并集，去重后按文档改动时间倒序。标「本项目」，悬浮显示来自几个会话。这一层回答的是「这个项目里被工作过的文档」，不是 `C:\业务\其他` 那 5,494 篇全量。
     - **有搜索词时**改在项目文件夹里全量找（否则只搜得到已经碰过的那几篇），提示行会写「搜索：项目文件夹全量」。
   - **工作区**：会话 cwd 下的全部 md（想翻整个文件夹时用）。
-  - **全库**：配置 `roots`（缺省 `C:\业务`）下的全部 md，**24,856 篇**（深度不限，实测扫完 1.6 秒）。
+  - **全库**：配置 `roots`（Windows 缺省 `C:\业务`，macOS/Linux 缺省用户主目录）下的全部 md，作者库实测 **24,856 篇**（深度不限，实测扫完 1.6 秒）。
   - 两层都空时，自动放宽到「工作区」并在提示行标注原因，不会给你一个空列表。
   - **层间不混排**：本会话的永远在最前，层内才按时间/待处理排；结果行右侧另一个按钮切「按最近 ⇄ 按待处理优先」。
   - 列表项显示相对时间（今天 16:20 / 昨天 09:05 / 08-29 14:00）、待处理条数与批注总数。底部输入框可直接粘绝对路径。
@@ -190,7 +190,11 @@ POST /api/dsh-doc-review/snote          { sessionId, action: save|delete|sent|re
 { "roots": ["C:\\业务"], "maxDocs": 60000, "maxDepth": 20, "projectSessions": 15, "author": "your-name" }
 ```
 
-`author` 缺省取本机登录用户名（`os.userInfo().username`）。**根目录**默认取环境变量 `DSH_DOC_REVIEW_VAULT`；没设且 `C:\业务` 存在就用它，否则退到用户主目录——所以换台机器第一次跑，记得改 `roots` 或设这个环境变量。
+macOS / Linux 上 `roots` 写 POSIX 绝对路径即可，如 `["/Users/you/notes"]`。
+
+`author` 缺省取本机登录用户名（`os.userInfo().username`）。**根目录**默认取环境变量 `DSH_DOC_REVIEW_VAULT`；没设时 Windows 上 `C:\业务` 存在就用它，否则（以及 macOS/Linux 上一律）退到用户主目录——所以换台机器第一次跑，记得改 `roots` 或设这个环境变量。
+
+**跨平台**：会话转写里的路径在 Windows 上认盘符路径、在 macOS/Linux 上认 `/` 开头的绝对路径；路径比较在 Windows/macOS 上不区分大小写、在 Linux 上区分（规则见 `lib/impl.js` 的 `isAbsDocPath` / `pathKey`，断言在 `test/path-utils.mjs`）。
 
 `maxDocs` 缺省 60000、`maxDepth` 缺省 20（都等于不设上限，全量收），配置值上限分别是 200000 / 64；`projectSessions` 是「相关」第二层聚合几个最近会话，缺省 15、上限 60（另有 25MB 转写字节预算兜底）。根目录下有超大目录时把它们加进源码里的 `SKIP_DIR_NAMES` / `SKIP_REL_PREFIXES`（当前已排除 `node_modules`、`.git`、`.obsidian`、`系统/tools`、`系统/ppt-master`、各类 `_` 前缀归档目录）。
 
