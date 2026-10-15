@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-doc-review UI harness</title>
+<!-- Served by run.py from a virtual origin (http://harness.local); see run.py docstring. -->
+<link rel="stylesheet" href="/theme.css">
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background: var(--dsw-alias-bg-base);
+    color: var(--dsw-alias-label-primary);
+  }
+  #view { height: 100vh; box-sizing: border-box; }
+</style>
+<script src="/vendor/react.js"></script>
+<script src="/vendor/react-dom.js"></script>
+<script>
+(function () {
+  var qs = new URLSearchParams(location.search)
+  var THEME = qs.get('theme') === 'dark' ? 'dark' : 'light'
+  var FIXTURE = qs.get('fixture') || 'default'
+  var BOX_W = Number(qs.get('w')) || 0
+  if (THEME === 'dark') document.documentElement.setAttribute('data-harness-dark', '')
+
+  /* ---------- fixture ---------- */
+  var VAULT = '/mock/vault'
+  var DOC = VAULT + '/批注台-v0.8-方案.md'
+  var filler = []
+  for (var i = 1; i <= 14; i++) filler.push('附录第 ' + i + ' 段：这里是用来撑出滚动高度的正文，评审时可以忽略，但它让「滚动正文」这个动作是真实发生的。', '')
+  var CONTENT = [
+    '# 文档批注台 v0.8 方案',
+    '',
+    '本方案描述批注台在跨平台下的改造范围，目标是让 Windows 与 macOS 行为一致。',
+    '',
+    '## 范围',
+    '',
+    '| 模块 | 负责人 | 状态 |',
+    '| --- | --- | --- |',
+    '| 路径归一 | linus | 已完成 |',
+    '| 浮框草稿 | lead | 进行中 |',
+    '| 主题对比度 | dieter | 待评审 |',
+    '',
+    '## 实现要点',
+    '',
+    '- 路径比较一律走 pathKey，大小写不敏感的文件系统先转小写',
+    '- 浮框写了字就不因滚动关闭',
+    '- 删除批注 6 秒内可撤销',
+    '',
+    '```js',
+    'function pathKey(p) {',
+    '  return caseInsensitiveFs() ? p.toLowerCase() : p',
+    '}',
+    '```',
+    '',
+    '## 风险',
+    '',
+    '旧版本的批注文件里可能混有反斜杠路径，需要一次性迁移。',
+    '',
+    '## 附录',
+    '',
+  ].concat(filler).join('\n')
+
+  function lineOf(text, needle) {
+    var i = text.indexOf(needle)
+    return i < 0 ? 0 : text.slice(0, i).split('\n').length
+  }
+  var NOW = Date.now()
+  function iso(msAgo) { return new Date(NOW - msAgo).toISOString() }
+  function cmt(id, quote, note, status, extra) {
+    var ls = lineOf(CONTENT, quote)
+    return Object.assign({
+      id: id, createdAt: iso(3600e3), updatedAt: iso(1800e3), author: '豆爸',
+      lineStart: ls, lineEnd: ls, quote: quote, note: note, status: status,
+      reply: '', resolvedAt: status === 'pending' ? null : iso(600e3), anchored: true,
+    }, extra || {})
+  }
+  var comments = [
+    cmt('c-float', '浮框写了字就不因滚动关闭', '补一句：按 Esc 收起后草稿也要保留，重新选中同一段要回来。', 'pending'),
+    cmt('c-migrate', '需要一次性迁移', '迁移脚本放到 test/ 里，跑完给个计数。', 'resolved', { reply: '已加 scan-coverage 的计数输出。' }),
+  ]
+  if (FIXTURE === 'rich') {
+    comments.push(cmt('c-orphan', '这句话已经在新版里被删掉了', '这段原文已不存在，应显示「已失锚」。', 'pending', { lineStart: 40, lineEnd: 40, anchored: false }))
+  }
+  var PROP_QUOTE = '目标是让 Windows 与 macOS 行为一致'
+  var store = {
+    content: CONTENT,
+    hash: 'hash-v2',
+    // rich: 批注写在旧版本上 → 显示「文档已改动」
+    docHash: FIXTURE === 'rich' ? 'hash-v1' : 'hash-v2',
+    comments: comments,
+    changes: [{
+      id: 'p-1', kind: 'replace', quote: PROP_QUOTE, before: PROP_QUOTE,
+      after: '目标是让 Windows、macOS 与 Linux 三端行为一致', note: '把 Linux 也写进目标，免得验收时漏掉。',
+      line: lineOf(CONTENT, PROP_QUOTE), anchor_how: 'exact', status: 'pending', createdAt: iso(900e3),
+    }],
+    snotes: [],
+  }
+  var DOCS = [
+    { path: DOC, name: '批注台-v0.8-方案.md', tier: 'session', via: 'write', hits: 3, mtimeMs: NOW - 120e3, seenMs: NOW - 60e3, pending: 1, total: 2 },
+    { path: VAULT + '/跨平台路径约定.md', name: '跨平台路径约定.md', tier: 'session', via: 'read', mtimeMs: NOW - 86400e3, seenMs: NOW - 3600e3, pending: 0, total: 0 },
+    { path: VAULT + '/发布清单.md', name: '发布清单.md', tier: 'project', via: 'edit', mtimeMs: NOW - 3 * 86400e3, pending: 0, total: 4 },
+  ]
+
+  /* ---------- fetch mock (/api/dsh-doc-review/*) ---------- */
+  var calls = []
+  function review() {
+    return { v: 1, doc: DOC, docHash: store.docHash, docMtimeMs: NOW - 120e3, updatedAt: iso(0), comments: JSON.parse(JSON.stringify(store.comments)) }
+  }
+  function pendingProps() { return store.changes.filter(function (c) { return c.status === 'pending' }).length }
+  var routes = {
+    hello: function () { return { ok: true } },
+    state: function () { return { ok: true, roots: [VAULT], author: '豆爸', reviewDir: '/mock/.dsh/doc-review', lastDoc: DOC, clientHelloAt: iso(0) } },
+    docs: function (q) {
+      var kw = (q.get('q') || '').toLowerCase()
+      var docs = DOCS.filter(function (d) { return !kw || d.name.toLowerCase().indexOf(kw) >= 0 })
+      return { ok: true, docs: docs, total: docs.length, scanned: 42, scanMs: 7, scopeUsed: q.get('scope') || 'related', cwd: VAULT, root: VAULT, tier1: 2, tier2: 1 }
+    },
+    doc: function (q) {
+      var p = q.get('path')
+      if (p !== DOC) return { error: '文档不存在', path: p }
+      return { ok: true, path: DOC, name: DOCS[0].name, content: store.content, mtimeMs: NOW - 120e3, hash: store.hash, review: review() }
+    },
+    save: function (q, body) {
+      store.comments = (body.comments || []).map(function (c) { return Object.assign({}, c) })
+      store.docHash = store.hash
+      return { ok: true, review: review(), hash: store.hash, mtimeMs: NOW - 120e3, reviewPath: '/mock/.dsh-review/x.review.json' }
+    },
+    props: function () { return { ok: true, doc: DOC, pending: pendingProps(), changes: store.changes, updatedAt: iso(0) } },
+    prop: function (q, body) {
+      var ids = body.ids && body.ids.length ? body.ids : null
+      var n = 0
+      store.changes.forEach(function (c) {
+        if (c.status !== 'pending' || (ids && ids.indexOf(c.id) < 0)) return
+        n++
+        c.status = body.action === 'accept' ? 'accepted' : (body.action === 'reject' ? 'rejected' : 'pending')
+      })
+      return { ok: true, accepted: body.action === 'accept' ? n : 0, rejected: body.action === 'reject' ? n : 0, reset: 0, missed: [], changes: store.changes, pending: pendingProps() }
+    },
+    snotes: function (q) { return { ok: true, sessionId: q.get('sessionId'), notes: store.snotes, pending: 0 } },
+    snote: function (q, body) { return { ok: true, sessionId: body.sessionId, notes: store.snotes, pending: 0 } },
+  }
+  var realFetch = window.fetch
+  window.fetch = function (input, init) {
+    var url = new URL(typeof input === 'string' ? input : input.url, location.href)
+    var m = url.pathname.match(/^\/api\/dsh-doc-review\/([a-z]+)$/)
+    if (!m) return realFetch.apply(this, arguments)
+    var body = null
+    try { body = init && init.body ? JSON.parse(init.body) : null } catch (e) { body = init.body }
+    var rec = { route: m[1], method: (init && init.method) || 'GET', query: Object.fromEntries(url.searchParams), body: body, at: Date.now() }
+    calls.push(rec)
+    var fn = routes[m[1]]
+    var out = fn ? fn(url.searchParams, body || {}) : { error: 'harness: no mock for ' + m[1] }
+    var status = fn ? (out.ok ? 200 : 404) : 501
+    return new Promise(function (res) {
+      setTimeout(function () { res(new Response(JSON.stringify(out), { status: status, headers: { 'content-type': 'application/json' } })) }, 15)
+    })
+  }
+
+  /* ---------- host stubs: __ModuleLoader__ + ctx ---------- */
+  var registry = { 'conversation.view': [], 'shell.overlay': [] }
+  var cleanups = []
+  var prompts = []
+  window.__ModuleLoader__ = {
+    modules: {},
+    load: function (spec) {
+      var exp = spec.factory(function (name) {
+        if (name === 'react') return window.React
+        if (name === 'react-dom') return window.ReactDOM
+        throw new Error('harness: unknown module ' + name)
+      })
+      this.modules[spec.id] = exp
+      exp.apply(ctx)
+    },
+  }
+  var slots = {
+    register: function (meta, render) {
+      var entry = { meta: meta, render: render }
+      ;(registry[meta.name] = registry[meta.name] || []).push(entry)
+      return function () { var l = registry[meta.name]; l.splice(l.indexOf(entry), 1) }
+    },
+    inject: function (name, fn) { var d = fn(); return typeof d === 'function' ? d : function () {} },
+  }
+  var ctx = {
+    slots: slots,
+    sessions: { list: { getSnapshot: function () { return { current: 'sess-1' } } } },
+    remote: { session: { prompt: function (req) { prompts.push(req); return Promise.resolve({ ok: true }) } } },
+    get: function () { return null },
+    effect: function (fn) { var c = fn(); if (typeof c === 'function') cleanups.push(c) },
+  }
+
+  /* ---------- contrast helpers (also handy from DevTools) ---------- */
+  var cv = document.createElement('canvas'); cv.width = cv.height = 1
+  var cx = cv.getContext('2d', { willReadFrequently: true })
+  function parseColor(s) {
+    s = String(s || '').trim()
+    var m = s.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/)
+    if (m) return [+m[1] / 255, +m[2] / 255, +m[3] / 255, alpha(m[4])]
+    m = s.match(/^color\(srgb\s+([-\d.e]+)\s+([-\d.e]+)\s+([-\d.e]+)(?:\s*\/\s*([\d.]+%?))?\s*\)$/)
+    if (m) return [clamp(+m[1]), clamp(+m[2]), clamp(+m[3]), alpha(m[4])]
+    if (s === 'transparent') return [0, 0, 0, 0]
+    // anything else (oklch, lab, color(display-p3 …)): let the browser convert to sRGB
+    cx.clearRect(0, 0, 1, 1); cx.fillStyle = '#000'; cx.fillStyle = s; cx.fillRect(0, 0, 1, 1)
+    var d = cx.getImageData(0, 0, 1, 1).data
+    return [d[0] / 255, d[1] / 255, d[2] / 255, d[3] / 255]
+  }
+  function alpha(a) { if (a == null) return 1; return /%$/.test(a) ? parseFloat(a) / 100 : +a }
+  function clamp(v) { return Math.max(0, Math.min(1, v)) }
+  function over(top, under) {   // top over opaque `under`
+    var a = top[3]
+    return [top[0] * a + under[0] * (1 - a), top[1] * a + under[1] * (1 - a), top[2] * a + under[2] * (1 - a), 1]
+  }
+  function lum(c) {
+    function ch(v) { return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
+    return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
+  }
+  function hex(c) { return '#' + c.slice(0, 3).map(function (v) { return ('0' + Math.round(v * 255).toString(16)).slice(-2) }).join('') }
+  /** Effective opaque background: composite every ancestor's background-color, outermost first. */
+  function effectiveBg(el) {
+    var chain = []
+    for (var n = el; n && n.nodeType === 1; n = n.parentElement) chain.push(n)
+    var bg = [1, 1, 1, 1]
+    for (var i = chain.length - 1; i >= 0; i--) bg = over(parseColor(getComputedStyle(chain[i]).backgroundColor), bg)
+    return bg
+  }
+  function contrastOf(el, pseudo) {
+    var cs = getComputedStyle(el, pseudo || null)
+    var bg = effectiveBg(el)
+    var fg = over(parseColor(cs.color), bg)
+    var op = 1
+    for (var n = el; n && n.nodeType === 1; n = n.parentElement) op *= +getComputedStyle(n).opacity
+    if (op < 1) fg = over([fg[0], fg[1], fg[2], op], bg)
+    var a = lum(fg), b = lum(bg)
+    var r = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+    var vis = el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden'
+    return { ratio: Math.round(r * 100) / 100, fg: hex(fg), bg: hex(bg), rawColor: cs.color, visible: vis, text: (pseudo ? el.placeholder : el.textContent || '').trim().slice(0, 24) }
+  }
+
+  window.__harness = {
+    theme: THEME, fixture: FIXTURE, calls: calls, prompts: prompts, store: store, registry: registry,
+    lastCall: function (route) { for (var i = calls.length - 1; i >= 0; i--) if (calls[i].route === route) return calls[i]; return null },
+    contrastOf: contrastOf, parseColor: parseColor,
+    ready: false,
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    if (THEME === 'dark') document.body.setAttribute('data-ds-dark-theme', '')
+    var view = document.getElementById('view')
+    if (BOX_W) view.style.width = BOX_W + 'px'
+    var h = React.createElement
+    function Slot(props) {
+      var list = registry[props.name] || []
+      return h(React.Fragment, null, list.map(function (e) { return h(React.Fragment, { key: e.meta.id }, e.render()) }))
+    }
+    ReactDOM.createRoot(view).render(h(Slot, { name: 'conversation.view' }))
+    ReactDOM.createRoot(document.getElementById('overlay')).render(h(Slot, { name: 'shell.overlay' }))
+    window.__harness.ready = true
+  })
+})()
+</script>
+<script src="/client.js"></script>
+</head>
+<body>
+<div id="view"></div>
+<div id="overlay"></div>
+</body>
+</html>
