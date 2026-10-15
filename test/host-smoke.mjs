@@ -101,7 +101,7 @@ async function main() {
   const tool = (n) => tools.find((t) => t.name === n)
 
   console.log('\n[1] 挂载')
-  ok('注册了 10 条路由（会话批注 2 + 建议模式 2）', routes.length === 10, 'got ' + routes.length)
+  ok('注册了 11 条路由（会话批注 2 + 建议模式 2 + 正文直写 1）', routes.length === 11, 'got ' + routes.length)
   ok('注册了 16 个工具（文档批注 4 + 会话批注 2 + 建议模式 3 + /doc-review 技能 7）', tools.length === 16, tools.map((t) => t.name).join(','))
   ok('工具齐名', ['doc_review_list', 'doc_review_resolve', 'doc_review_reopen'].every((n) => !!tool(n)))
   ok('/doc-review 技能工具齐名', ['doc_review_history', 'doc_review_mine_candidates', 'doc_review_rules_list', 'doc_review_rules_add', 'doc_review_rules_update', 'doc_review_rules_remove', 'doc_review_preview_apply'].every((n) => !!tool(n)))
@@ -185,6 +185,36 @@ async function main() {
   res = makeRes()
   await route('/api/dsh-doc-review/hello').handler(makePost('/api/dsh-doc-review/hello', {}), res)
   ok('hello ok', res.json() && res.json().ok === true)
+
+  console.log('\n[10.5] /doc-write 正文直写')
+  // 正常写：baseHash 传当前指纹
+  res = makeRes()
+  await route('/api/dsh-doc-review/doc').handler(makeGet('/api/dsh-doc-review/doc?path=' + encodeURIComponent(docPath)), res)
+  const curHash = res.json().hash
+  res = makeRes()
+  await route('/api/dsh-doc-review/doc-write').handler(makePost('/api/dsh-doc-review/doc-write', {
+    path: docPath, content: '# 烟测方案（改）\n\n毛利按品类测算，不含税。\n', baseHash: curHash,
+  }), res)
+  const wJson = res.json()
+  ok('直写 ok 且带回新 hash/mtime', res.code === 200 && wJson.ok && typeof wJson.hash === 'string' && typeof wJson.mtimeMs === 'number', res.body.slice(0, 160))
+  // 乐观锁：拿旧指纹再写 → 409
+  res = makeRes()
+  await route('/api/dsh-doc-review/doc-write').handler(makePost('/api/dsh-doc-review/doc-write', {
+    path: docPath, content: '# 覆盖\n', baseHash: curHash,
+  }), res)
+  ok('指纹过期拒绝 (409)', res.code === 409, 'code=' + res.code + ' ' + res.body.slice(0, 120))
+  // 越界：roots 外拒绝
+  res = makeRes()
+  await route('/api/dsh-doc-review/doc-write').handler(makePost('/api/dsh-doc-review/doc-write', {
+    path: outside, content: '# 越界\n', baseHash: '',
+  }), res)
+  ok('根目录外拒绝直写 (403)', res.code === 403, 'code=' + res.code + ' ' + res.body.slice(0, 120))
+  // 还原正文（不带 baseHash 的裸写走当前态，避免污染后续小节）
+  res = makeRes()
+  await route('/api/dsh-doc-review/doc-write').handler(makePost('/api/dsh-doc-review/doc-write', {
+    path: docPath, content: docText, baseHash: '',
+  }), res)
+  ok('还原正文 ok', res.code === 200 && res.json().ok === true, res.body.slice(0, 120))
 
   console.log('\n[11] 失锚重定位（直接从 client.js 抽真源码来跑，不另写参考实现）')
   const clientSrc = await fsp.readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
@@ -438,6 +468,22 @@ async function main() {
   await propTool('doc_change_propose').execute({ doc: pDoc, changes: [{ quote: '这段原文根本不存在于文档里', after: 'x', note: 't' }] }, {})
   const outMiss = await propTool('doc_change_decide').execute({ doc: pDoc, action: 'accept' }, {})
   ok('对不上的提案不写、且说清楚', /一个字都没写|对不上/.test(outMiss), String(outMiss).slice(0, 160))
+
+  const anchorDoc = path.join(TMP_ROOT, 'P-锚点匹配.md')
+  const anchorBase = '前置内容。\n\n中间句：空白归一匹配。\n'
+  await fsp.writeFile(anchorDoc, anchorBase, 'utf8')
+  const normalizedOut = await propTool('doc_change_propose').execute({
+    doc: anchorDoc, changes: [{ quote: '中间句：空白归一\n匹配。', after: '中间句：已匹配。' }],
+  }, {})
+  ok('文档中段的空白归一引用可定位', /已登记 1 条/.test(normalizedOut) && /原文：中间句：空白归一匹配/.test(normalizedOut), String(normalizedOut).slice(0, 180))
+  const overlapOut = await propTool('doc_change_propose').execute({
+    doc: anchorDoc, changes: [
+      { quote: '中间句：空白归一匹配。', after: '改动一' },
+      { quote: '空白归一匹配', after: '改动二' },
+    ],
+  }, {})
+  const overlapDecision = await propTool('doc_change_decide').execute({ doc: anchorDoc, action: 'accept' }, {})
+  ok('重叠提案整体拒绝且原文不变', /范围重叠/.test(overlapDecision) && (await fsp.readFile(anchorDoc, 'utf8')) === anchorBase, String(overlapOut).slice(0, 100) + ' / ' + String(overlapDecision).slice(0, 100))
 
   console.log('\n结果：pass=' + pass + ' fail=' + fail)
   console.log('（本次运行目录 = ' + TEST_HOME + '，未触碰 ~/.dsh/doc-review/）')
