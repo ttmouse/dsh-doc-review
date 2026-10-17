@@ -21,7 +21,7 @@ function grab(name) {
   throw new Error('unbalanced braces: ' + name)
 }
 
-const names = ['relTime', 'isMacPlatform', 'shortcutLabel', 'squeeze', 'plainQuote', 'locateQuote', 'offsetInNodes', 'alignDelta', 'threadOf', 'whenText']
+const names = ['relTime', 'isMacPlatform', 'shortcutLabel', 'squeeze', 'plainQuote', 'locateQuote', 'historyParagraphAt', 'offsetInNodes', 'alignDelta', 'threadOf', 'whenText']
 const H = new Function(names.map(grab).join('\n') + '\nreturn {' + names.join(',') + '}')()
 
 console.log('[1] shortcutLabel / isMacPlatform')
@@ -52,6 +52,25 @@ ok('list marker stripped', r && '项目一 项目二'.slice(r.start, r.end) === 
 ok('not found → null (lost anchor, no guessing)', H.locateQuote(text, '完全不存在') === null)
 ok('blank quote → null', H.locateQuote(text, '   ') === null)
 ok('empty text → null', H.locateQuote('', 'x') === null)
+
+console.log('[2b] 历史消息 hover 批注目标')
+const paragraph = { innerText: '历史记录里的一个段落。' }
+const message = { contains: (node) => node === paragraph }
+const historyTarget = {
+  nodeType: 1,
+  closest(selector) {
+    if (selector.startsWith('.dr-root')) return null
+    if (selector === '[data-message-client-id]') return message
+    if (selector.startsWith('p,li')) return paragraph
+    return null
+  },
+}
+const historyHit = H.historyParagraphAt(historyTarget)
+ok('消息段落解析为可批注目标', historyHit && historyHit.block === paragraph && historyHit.text === paragraph.innerText)
+const outsideTarget = { nodeType: 1, closest: () => null }
+ok('非历史消息不显示入口', H.historyParagraphAt(outsideTarget) === null)
+paragraph.innerText = 'x'
+ok('单字符内容不显示入口', H.historyParagraphAt(historyTarget) === null)
 
 console.log('[3] offsetInNodes')
 const lens = [3, 4, 2]           // "abc" "defg" "hi"
@@ -97,6 +116,7 @@ const css = src.slice(cssStart, cssEnd)
 ok('no hard-coded #hex colours in styles', !/#[0-9a-fA-F]{3,8}\b/.test(css), (css.match(/#[0-9a-fA-F]{3,8}\b/) || [])[0])
 ok('no rgb()/rgba()/hsl() literals in styles', !/\b(rgba?|hsla?)\(/.test(css))
 ok('highlight names dr-anchor / dr-anchor-active styled', css.includes('::highlight(dr-anchor)') && css.includes('::highlight(dr-anchor-active)'))
+ok('历史消息 hover 批注图标有独立样式', css.includes('.dr-history-comment:hover') && css.includes('position:fixed'))
 ok('reduced-motion respected', css.includes('prefers-reduced-motion'))
 ok('no hard-coded Ctrl+ in UI strings outside helpers', !/['"][^'"\n]*Ctrl\+[^'"\n]*['"]/.test(src.replace(grab('shortcutLabel'), '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')))
 

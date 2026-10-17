@@ -57,16 +57,18 @@ ok('G2b 列表行渲染(• 开头)', (await lineEl(5).textContent()).trim().sta
 ok('G2c 引用行无 >', !((await lineEl(9).textContent()).startsWith('>')))
 ok('G2d 只有一行 raw', (await page.locator('.tl-raw').count()) === 1)
 
-console.log('\n[G4] 点别的行 → 旧行渲染回去、新行 raw')
+console.log('\n[G4] 点别的行 → 旧行渲染回去、新行就地编辑（纯文本段保持渲染态）')
 await clickInto(5, 0.5)
 ok('G4a 行3渲染回去(有 strong)', (await page.locator('.tl[data-ls="3"] strong').count()) >= 1)
-ok('G4b 行5变 raw(- 开头)', (await modeOf(5)) === 'raw' && (await lineEl(5).textContent()).startsWith('-'))
-ok('G4c 仍一行 raw', (await page.locator('.tl-raw').count()) === 1)
+ok('G4b 行5保持渲染态(• 开头)', (await modeOf(5)) === 'r' && (await lineEl(5).textContent()).trim().startsWith('•'))
+ok('G4c 零 raw 行（live 就地编辑）', (await page.locator('.tl-raw').count()) === 0)
 
 console.log('\n[G5] 打 **新词** 离开 → 渲染成粗体；落盘是标准 Markdown')
 await clickInto(5, 0.95)
-await page.keyboard.type(' **新词**')
-ok('G5a 输入中可见 **', (await lineEl(5).textContent()).includes('**新词**'))
+await page.keyboard.type(' **新')
+ok('G5a 输入中间态可见未闭合 **', (await lineEl(5).textContent()).includes('**新'))
+await page.keyboard.type('词**')
+ok('G5a2 闭合后行内即时渲染粗体', (await page.locator('.tl[data-ls="5"] strong').count()) === 1)
 await clickInto(1, 0.5)
 ok('G5b 离开后渲染 <strong>新词</strong>', (await page.locator('.tl[data-ls="5"] strong').count()) === 1)
 await page.waitForTimeout(900)   // 等 600ms 防抖落盘
@@ -134,16 +136,16 @@ if (pillVisible) {
   } else ok('G9b 批注输入框出现', false, 'no textarea')
 }
 
-console.log('\n[G3] 全程零视觉提示（编辑中复查）')
+console.log('\n[G3] 全程零视觉提示（编辑中复查；live 渲染行同样无框无底）')
 await clickInto(20, 0.5)
 const g3 = await page.evaluate(() => {
-  const el = document.querySelector('.tl-raw')
+  const el = document.querySelector('.tl-raw') || document.querySelector('.dr-editor-host .tl:hover') || (document.activeElement && document.activeElement.querySelector('.tl[data-mode]'))
   const host = document.querySelector('.dr-editor-host')
   if (!el || !host) return null
   const cs = getComputedStyle(el), hs = getComputedStyle(host)
   return { bw: cs.borderTopWidth, bg: cs.backgroundColor, box: cs.boxShadow, hostOutline: hs.outlineWidth, hostBox: hs.boxShadow }
 })
-ok('G3a raw 行/宿主无框无底', g3 && g3.bw === '0px' && g3.bg === 'rgba(0, 0, 0, 0)' && g3.hostOutline === '0px' && g3.hostBox === 'none', JSON.stringify(g3))
+ok('G3a 编辑行/宿主无框无底', g3 && g3.bw === '0px' && g3.bg === 'rgba(0, 0, 0, 0)' && g3.hostOutline === '0px' && g3.hostBox === 'none', JSON.stringify(g3))
 await page.screenshot({ path: '.artifacts/client-g3.png' })
 
 console.log('\n[Gh] 标题/引用行编辑态保持原视觉（Typora 口径）')
@@ -162,7 +164,7 @@ const hAfter = await page.evaluate(() => {
 })
 ok('Gh1 标题编辑态保持字号', hBefore.size === hAfter.size, JSON.stringify({ hBefore, hAfter }))
 ok('Gh2 标题编辑态保持字重', hBefore.weight === hAfter.weight)
-ok('Gh3 raw 行仍是源码且带标题类', hAfter.cls.includes('tl-h') && hAfter.text.includes('##'), hAfter.cls)
+ok('Gh3 标题编辑态保持渲染（无 ##、保留标题类）', hAfter.cls.includes('tl-h') && !hAfter.text.includes('##'), hAfter.cls)
 await clickInto(3, 0.5)
 await page.waitForTimeout(250)
 const liQ = await findLine('如果你只有五分钟')
